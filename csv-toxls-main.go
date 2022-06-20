@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/tealeg/xlsx"
@@ -25,6 +26,14 @@ func parseCL() ([]string, []string) {
 	return args, flags
 }
 
+func parseMultiFlg(flag string) (string, []string) { //flag, string values array
+	if !strings.Contains(flag, ":") {
+		return flag, []string{}
+	}
+	rf := strings.Split(flag, ":")
+	return rf[0], rf[1:]
+}
+
 func errprintf(format string, a ...interface{}) {
 	fmt.Printf(format, a...)
 	os.Exit(1)
@@ -35,7 +44,24 @@ func toutf(text string) string {
 	return ftext
 }
 
-func mkQuotedXlsx(csvname, xlsname string) {
+func atoi(in string) int {
+	x, err := strconv.Atoi(in)
+	if err != nil {
+		return 0
+	}
+	return x
+}
+
+func inarr(n int, nidx []int) bool {
+	for _, v := range nidx {
+		if v == n {
+			return true
+		}
+	}
+	return false
+}
+
+func mkQuotedXlsx(csvname, xlsname string, nidx []int) {
 	var reader *csv.Reader
 	csvFile, err := os.Open(csvname)
 	if err != nil {
@@ -64,9 +90,17 @@ func mkQuotedXlsx(csvname, xlsname string) {
 	cnt := 1
 	for err == nil {
 		row := sheet.AddRow()
-		for _, field := range fields {
+		for j := 0; j < len(fields); j++ {
 			cell := row.AddCell()
-			cell.Value = field
+			if cnt == 1 && !dataonly {
+				cell.Value = fields[j]
+				continue
+			}
+			if inarr(j, nidx) {
+				cell.SetInt(atoi(fields[j]))
+			} else {
+				cell.Value = fields[j]
+			}
 		}
 		fields, err = reader.Read()
 		if err == nil {
@@ -79,7 +113,7 @@ func mkQuotedXlsx(csvname, xlsname string) {
 	fmt.Printf("Written: %d rows\n", cnt)
 }
 
-func mkDefaultXlsx(csvname, xlsname string) {
+func mkDefaultXlsx(csvname, xlsname string, nidx []int) {
 	csvbin, err := ioutil.ReadFile(csvname)
 	if err != nil {
 		errprintf("ERROR: Can't open file '%s'\n", csvname)
@@ -108,7 +142,15 @@ func mkDefaultXlsx(csvname, xlsname string) {
 		row := sheet.AddRow()
 		for j := 0; j < len(cline); j++ {
 			cell := row.AddCell()
-			cell.Value = cline[j]
+			if i == 0 && !dataonly {
+				cell.Value = cline[j]
+				continue
+			}
+			if inarr(j, nidx) {
+				cell.SetInt(atoi(cline[j]))
+			} else {
+				cell.Value = cline[j]
+			}
 		}
 		cnt++
 	}
@@ -116,19 +158,35 @@ func mkDefaultXlsx(csvname, xlsname string) {
 	fmt.Printf("Written: %d rows, skipped: %d\n", cnt, skip)
 }
 
-var win bool    //win-1251 encoded
-var quoted bool //quoted fields
-var comma bool  // comma (,) instead semicolon (;)
-var empty bool  // enable empty rows
+func about() {
+	t := `usage:
+	csv-toxls [flags] filename
+	flags:
+	 -w : windows encoding
+	 -q : quoted fields
+	 -c : comma delimited
+	 -e : enable empty rows
+	 -n : numeric fields (ex: -n:1:3:6)
+	 -d : data only (no header)
+	`
+	errprintf(t)
+}
+
+var win bool       //win-1251 encoded
+var quoted bool    //quoted fields
+var comma bool     // comma (,) instead semicolon (;)
+var empty bool     // enable empty rows
+var nidx = []int{} //numeric fields
+var dataonly bool  //data only
 
 func main() {
 	if len(os.Args) < 2 {
-		errprintf("usage:\ncsv-toxls [flags] filename\nflags:\n -w : windows encoding\n" +
-			" -q : quoted fields\n -c : comma delimited\n -e : enable empty rows\n")
+		about()
 	}
 	args, flags := parseCL()
 	for _, v := range flags {
-		switch v {
+		f, narr := parseMultiFlg(v)
+		switch f {
 		case "w":
 			win = true
 		case "q":
@@ -137,6 +195,15 @@ func main() {
 			comma = true
 		case "e":
 			empty = true
+		case "d":
+			dataonly = true
+		case "n":
+			for _, n := range narr {
+				if x := atoi(n); x != 0 {
+					nidx = append(nidx, x)
+				}
+			}
+
 		}
 	}
 
@@ -150,9 +217,9 @@ func main() {
 	xlsname := strings.Replace(csvname, ".csv", ".xlsx", -1)
 
 	if quoted {
-		mkQuotedXlsx(csvname, xlsname)
+		mkQuotedXlsx(csvname, xlsname, nidx)
 	} else {
-		mkDefaultXlsx(csvname, xlsname)
+		mkDefaultXlsx(csvname, xlsname, nidx)
 	}
 
 }
