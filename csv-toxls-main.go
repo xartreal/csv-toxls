@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -52,6 +53,15 @@ func atoi(in string) int {
 	return x
 }
 
+func atof(in string) float64 {
+	x, err := strconv.ParseFloat(in, 64)
+	if err != nil {
+		return 0.0
+	}
+	return x
+
+}
+
 func inarr(n int, nidx []int) bool {
 	for _, v := range nidx {
 		if v == n {
@@ -63,6 +73,7 @@ func inarr(n int, nidx []int) bool {
 
 func mkQuotedXlsx(csvname, xlsname string, nidx []int) {
 	var reader *csv.Reader
+
 	csvFile, err := os.Open(csvname)
 	if err != nil {
 		errprintf("ERROR: Can't open file '%s'\n", csvname)
@@ -74,9 +85,7 @@ func mkQuotedXlsx(csvname, xlsname string, nidx []int) {
 	} else {
 		reader = csv.NewReader(csvFile)
 	}
-	if !comma {
-		reader.Comma = ';'
-	}
+	reader.Comma = delimiter
 
 	xlsxFile := xlsx.NewFile()
 	sheet, err := xlsxFile.AddSheet("1")
@@ -92,12 +101,16 @@ func mkQuotedXlsx(csvname, xlsname string, nidx []int) {
 		row := sheet.AddRow()
 		for j := 0; j < len(fields); j++ {
 			cell := row.AddCell()
-			if cnt == 1 && !dataonly {
+			if cnt == 1 && !dataonly.MatchString(fields[j]) { //header recognition
 				cell.Value = fields[j]
 				continue
 			}
 			if inarr(j, nidx) {
-				cell.SetInt(atoi(fields[j]))
+				if strings.Contains(fields[j], ".") {
+					cell.SetFloat(atof(fields[j]))
+				} else {
+					cell.SetInt(atoi(fields[j]))
+				}
 			} else {
 				cell.Value = fields[j]
 			}
@@ -122,62 +135,96 @@ func mkDefaultXlsx(csvname, xlsname string, nidx []int) {
 	xlsxFile := xlsx.NewFile()
 	sheet, _ := xlsxFile.AddSheet("1")
 
-	cnt, skip := 0, 0
-	delimiter := ";"
-	if comma {
-		delimiter = ","
-	}
+	cnt, skipped := 0, 0
 
 	csvarr := strings.Split(string(csvbin), "\n")
 	for i := 0; i < len(csvarr); i++ {
 		if !empty && (len(csvarr[i]) < 1) {
-			skip++
+			skipped++
 			continue
 		}
 		xli := strings.TrimSpace(csvarr[i])
 		if win {
 			xli = toutf(xli)
 		}
-		cline := strings.Split(xli, delimiter)
+		fields := strings.Split(xli, string(delimiter))
 		row := sheet.AddRow()
-		for j := 0; j < len(cline); j++ {
+		for j := 0; j < len(fields); j++ {
 			cell := row.AddCell()
-			if i == 0 && !dataonly {
-				cell.Value = cline[j]
+			if i == 0 && !dataonly.MatchString(fields[j]) { //header recognition
+				cell.Value = fields[j]
 				continue
 			}
 			if inarr(j, nidx) {
-				cell.SetInt(atoi(cline[j]))
+				if strings.Contains(fields[j], ".") {
+					cell.SetFloat(atof(fields[j]))
+				} else {
+					cell.SetInt(atoi(fields[j]))
+				}
 			} else {
-				cell.Value = cline[j]
+				cell.Value = fields[j]
 			}
 		}
 		cnt++
 	}
 	xlsxFile.Save(xlsname)
-	fmt.Printf("Written: %d rows, skipped: %d\n", cnt, skip)
+	fmt.Printf("Written: %d rows, skipped: %d\n", cnt, skipped)
+}
+
+func printHeader(csvname string) {
+	var reader *csv.Reader
+
+	file, err := os.Open(csvname)
+	if err != nil {
+		errprintf("ERROR: File '%s' not found\n", csvname)
+	}
+	defer file.Close()
+
+	if win {
+		reader = csv.NewReader(charmap.Windows1251.NewDecoder().Reader(file))
+	} else {
+		reader = csv.NewReader(file)
+	}
+	reader.Comma = delimiter
+	reader.LazyQuotes = true
+
+	record, e := reader.Read()
+	if e != nil {
+		errprintf("ERR: %s\n", e)
+	}
+	if len(record) < 2 {
+		errprintf("ERROR: No header\n")
+	}
+	fmt.Printf("--------\n")
+	for i := 0; i < len(record); i++ {
+		fmt.Printf("%d: %s\n", i, record[i])
+	}
+	fmt.Printf("--------\n")
 }
 
 func about() {
 	t := `usage:
 	csv-toxls [flags] filename
 	flags:
-	 -w : windows encoding
+	 -w : windows-1251 encoding
 	 -q : quoted fields
 	 -c : comma delimited
 	 -e : enable empty rows
 	 -n : numeric fields (ex: -n:1:3:6)
-	 -d : data only (no header)
+	 -h : show header only
 	`
 	errprintf(t)
 }
 
-var win bool       //win-1251 encoded
-var quoted bool    //quoted fields
-var comma bool     // comma (,) instead semicolon (;)
-var empty bool     // enable empty rows
-var nidx = []int{} //numeric fields
-var dataonly bool  //data only
+var (
+	win       bool      //win-1251 encoded
+	quoted    bool      //quoted fields
+	empty     bool      // enable empty rows
+	header    bool      //show header
+	nidx      = []int{} //numeric fields
+	dataonly  = regexp.MustCompile(`^\d`)
+	delimiter = ';' //default: semicolon (;) instead comma (,)
+)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -192,23 +239,24 @@ func main() {
 		case "q":
 			quoted = true
 		case "c":
-			comma = true
+			delimiter = ','
 		case "e":
 			empty = true
-		case "d":
-			dataonly = true
+		case "h":
+			header = true
 		case "n":
 			for _, n := range narr {
 				if x := atoi(n); x != 0 {
 					nidx = append(nidx, x)
 				}
 			}
-
+		default:
+			errprintf("ERROR: Invalid option: '%s'\n", f)
 		}
 	}
 
 	if len(args) < 1 {
-		errprintf("Incorrect command line syntax\n")
+		errprintf("ERROR: No input file\n")
 	}
 	csvname := args[0]
 	if filepath.Ext(csvname) != ".csv" {
@@ -216,9 +264,12 @@ func main() {
 	}
 	xlsname := strings.Replace(csvname, ".csv", ".xlsx", -1)
 
-	if quoted {
+	switch {
+	case header:
+		printHeader(csvname)
+	case quoted:
 		mkQuotedXlsx(csvname, xlsname, nidx)
-	} else {
+	default:
 		mkDefaultXlsx(csvname, xlsname, nidx)
 	}
 
